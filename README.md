@@ -11,7 +11,7 @@ The whole app runs with Docker, so you can bring up the backend, frontend, and d
 - Clean chat UI with message bubbles and sender labels
 - Light and dark theme toggle
 - Docker Compose setup for backend, frontend, and database
-- 
+  
 # Tech Stack
 **Frontend**
 - React with TypeScript
@@ -27,7 +27,7 @@ The whole app runs with Docker, so you can bring up the backend, frontend, and d
 **Infrastructure**
 - Docker
 - Docker Compose
-- 
+  
 # How to Run (with Docker)
 ### Prerequisites
 - Git
