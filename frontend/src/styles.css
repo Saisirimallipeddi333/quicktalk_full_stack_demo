@@ -375,3 +375,61 @@ body {
   font-size: 0.8rem;
   color: var(--text-muted);
 }
+
+.chat-date-divider {
+  text-align: center;
+  margin: 8px 0;
+  font-size: 12px;
+  color: var(--qt-muted-text, #777);
+}
+
+.chat-date-divider span {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.05);
+}
+
+.chat-bubble-meta {
+  margin-top: 4px;
+  font-size: 11px;
+  text-align: right;
+  opacity: 0.7;
+}
+.chat-input-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px;
+  border-top: 1px solid rgba(0, 0, 0, 0.05);
+}
+
+.chat-icon-button {
+  border: none;
+  background: transparent;
+  font-size: 20px;
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 999px;
+}
+
+.chat-icon-button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.emoji-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 6px 8px 10px;
+}
+
+.emoji-button {
+  border: none;
+  background: transparent;
+  font-size: 20px;
+  cursor: pointer;
+  padding: 2px 4px;
+}
+

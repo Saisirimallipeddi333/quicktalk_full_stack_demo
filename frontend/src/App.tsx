@@ -19,26 +19,46 @@ type ChatSummary = {
   unreadCount: number;
 };
 
+const formatTime = (iso?: string) => {
+  if (!iso) return "";
+  const d = new Date(iso);
+  return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+};
+
+const formatDate = (iso?: string) => {
+  if (!iso) return "";
+  const d = new Date(iso);
+  return d.toLocaleDateString([], {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  });
+};
+
+const dateKey = (iso?: string) => {
+  if (!iso) return "";
+  const d = new Date(iso);
+  return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
+};
+
+
 // Build sidebar chat list from full message history + lastRead map
 const buildChatSummaries = (
   me: string,
   msgs: ChatMessage[],
   lastRead: Record<string, string>
 ): ChatSummary[] => {
-  // group messages by "other user"
   const grouped: Record<string, ChatMessage[]> = {};
 
   msgs.forEach((m) => {
     const other = m.sender === me ? m.recipient : m.sender;
     if (!other) return;
-
     if (!grouped[other]) grouped[other] = [];
     grouped[other].push(m);
   });
 
   const summaries: ChatSummary[] = Object.entries(grouped).map(
     ([other, list]) => {
-      // sort list by time/id just in case
       list.sort((a, b) => {
         const t1 = new Date(a.sentAt ?? 0).getTime();
         const t2 = new Date(b.sentAt ?? 0).getTime();
@@ -52,7 +72,6 @@ const buildChatSummaries = (
       const lrStr = lastRead[other];
       const lr = lrStr ? new Date(lrStr).getTime() : 0;
 
-      // unread = messages to me after lastRead
       const unreadCount = list.filter((m) => {
         if (m.recipient !== me) return false;
         const t = new Date(m.sentAt ?? 0).getTime();
@@ -68,7 +87,6 @@ const buildChatSummaries = (
     }
   );
 
-  // most recent chat on top
   return summaries.sort(
     (a, b) => (b.lastTime ?? "").localeCompare(a.lastTime ?? "")
   );
@@ -95,12 +113,32 @@ const App: React.FC = () => {
     setTheme((prev) => (prev === "light" ? "dark" : "light"));
   };
 
+  // -------- AUTH MODE (login vs signup) --------
+  const [authMode, setAuthMode] = useState<"login" | "signup">("login");
+  const [signupStep, setSignupStep] = useState<"FORM" | "VERIFY_EMAIL">("FORM");
+
   // -------- LOGIN STATE --------
   const [email, setEmail] = useState("");
-  const [loginName, setLoginName] = useState("");
+  const [password, setPassword] = useState("");
+  const [loginName, setLoginName] = useState(""); // will be set from backend username
   const [loggedInUser, setLoggedInUser] = useState<string | null>(null);
   const [loginError, setLoginError] = useState<string | null>(null);
+  const [loginInfo, setLoginInfo] = useState<string | null>(null);
   const [loggingIn, setLoggingIn] = useState(false);
+
+  // -------- SIGNUP STATE --------
+  const [signupEmail, setSignupEmail] = useState("");
+  const [signupUsername, setSignupUsername] = useState("");
+  const [signupFirstName, setSignupFirstName] = useState("");
+  const [signupLastName, setSignupLastName] = useState("");
+  const [signupPassword, setSignupPassword] = useState("");
+  const [signupConfirmPassword, setSignupConfirmPassword] = useState("");
+  const [signupGender, setSignupGender] = useState("");
+  const [signupDob, setSignupDob] = useState(""); // YYYY-MM-DD
+  const [signupCountry, setSignupCountry] = useState("");
+  const [signupOtp, setSignupOtp] = useState("");
+  const [signupError, setSignupError] = useState<string | null>(null);
+  const [signingUp, setSigningUp] = useState(false);
 
   // -------- CHAT STATE --------
   const [connected, setConnected] = useState(false);
@@ -109,6 +147,15 @@ const App: React.FC = () => {
   const [activeChatUser, setActiveChatUser] = useState<string | null>(null);
   const [input, setInput] = useState("");
   const [lastRead, setLastRead] = useState<Record<string, string>>({});
+  
+    // -------- EMOJI PICKER --------
+  const [showEmojiPicker, setShowEmojiPicker] = useState(false);
+  const commonEmojis = ["😀", "😂", "😍", "😎", "👍", "🙏", "🎉", "❤️"];
+
+  const addEmoji = (emoji: string) => {
+    setInput((prev) => prev + emoji);
+  };
+
 
   const clientRef = useRef<Client | null>(null);
   const activeChatUserRef = useRef<string | null>(null);
@@ -118,7 +165,7 @@ const App: React.FC = () => {
     activeChatUserRef.current = activeChatUser;
   }, [activeChatUser]);
 
-  // Load stored username (auto-login)
+  // Load stored username (auto-login by username only for now)
   useEffect(() => {
     const stored = localStorage.getItem("qt_username");
     if (stored) {
@@ -172,7 +219,6 @@ const App: React.FC = () => {
         }
 
         const data: ChatMessage[] = await res.json();
-        // sort by time then id, just in case
         data.sort((a, b) => {
           const t1 = new Date(a.sentAt ?? 0).getTime();
           const t2 = new Date(b.sentAt ?? 0).getTime();
@@ -209,18 +255,15 @@ const App: React.FC = () => {
       onConnect: () => {
         setConnected(true);
 
-        // Subscribe to THIS user’s private topic
         client.subscribe(`/topic/user.${loggedInUser}`, (message: IMessage) => {
           const body = JSON.parse(message.body) as ChatMessage;
 
           setMessages((prev) => [...prev, body]);
 
-          // If no chat selected yet, open the DM we just got
           const other =
             body.sender === loggedInUser ? body.recipient : body.sender;
           if (!activeChatUserRef.current && other) {
             setActiveChatUser(other);
-            // user is looking at it now, mark read
             markChatRead(other);
           }
         });
@@ -239,43 +282,177 @@ const App: React.FC = () => {
     };
   }, [loggedInUser]);
 
-  // ---------- LOGIN HANDLER ----------
+  // ---------- LOGIN HANDLER (email + password) ----------
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoginError(null);
+    setLoginInfo(null);
 
-    const trimmedName = loginName.trim();
     const trimmedEmail = email.trim();
+    const trimmedPassword = password.trim();
 
-    if (!trimmedName || !trimmedEmail) {
-      setLoginError("Please enter both email and username.");
+    if (!trimmedEmail || !trimmedPassword) {
+      setLoginError("Please enter both email and password.");
       return;
     }
 
     try {
       setLoggingIn(true);
-      const res = await fetch("http://localhost:8080/api/users/login", {
+      const res = await fetch("http://localhost:8080/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          username: trimmedName,
           email: trimmedEmail,
+          password: trimmedPassword,
         }),
       });
 
       if (!res.ok) {
-        setLoginError("Login failed. Check backend /api/users/login.");
+        const text = await res.text();
+        setLoginError(text || "Login failed.");
         return;
       }
 
-      setLoggedInUser(trimmedName);
-      localStorage.setItem("qt_username", trimmedName);
+      const data = (await res.json()) as { username: string };
+
+      setLoggedInUser(data.username);
+      setLoginName(data.username);
+      localStorage.setItem("qt_username", data.username);
+      setPassword("");
     } catch (err) {
       console.error(err);
       setLoginError("Could not reach server.");
     } finally {
       setLoggingIn(false);
     }
+  };
+
+  // ---------- SIGNUP HANDLERS ----------
+  const handleSignupSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSignupError(null);
+
+    const emailTrim = signupEmail.trim();
+    const usernameTrim = signupUsername.trim();
+    const pwdTrim = signupPassword.trim();
+    const confirmTrim = signupConfirmPassword.trim();
+
+    if (!emailTrim || !usernameTrim || !pwdTrim || !confirmTrim) {
+      setSignupError("Email, username and password are required.");
+      return;
+    }
+    if (pwdTrim !== confirmTrim) {
+      setSignupError("Passwords do not match.");
+      return;
+    }
+
+    try {
+      setSigningUp(true);
+      const res = await fetch("http://localhost:8080/api/auth/register", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: emailTrim,
+          username: usernameTrim,
+          firstName: signupFirstName.trim(),
+          lastName: signupLastName.trim(),
+          password: pwdTrim,
+          confirmPassword: confirmTrim,
+          gender: signupGender.trim(),
+          dateOfBirth: signupDob || null,
+          countryOfOrigin: signupCountry.trim(),
+        }),
+      });
+
+      if (!res.ok) {
+        const text = await res.text();
+        setSignupError(text || "Registration failed.");
+        return;
+      }
+
+      // Move to OTP step
+      setSignupStep("VERIFY_EMAIL");
+    } catch (err) {
+      console.error(err);
+      setSignupError("Could not reach server.");
+    } finally {
+      setSigningUp(false);
+    }
+  };
+
+  const handleSignupVerify = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSignupError(null);
+
+    const emailTrim = signupEmail.trim();
+    const otpTrim = signupOtp.trim();
+
+    if (!emailTrim || !otpTrim) {
+      setSignupError("Email and OTP are required.");
+      return;
+    }
+
+    try {
+      setSigningUp(true);
+      const res = await fetch("http://localhost:8080/api/auth/verify-email", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: emailTrim,
+          otp: otpTrim,
+        }),
+      });
+
+      if (!res.ok) {
+        const text = await res.text();
+        setSignupError(text || "Email verification failed.");
+        return;
+      }
+
+      // After successful verification, switch back to login tab
+      setAuthMode("login");
+      setSignupStep("FORM");
+      setSignupOtp("");
+      setSignupError(null);
+
+      // Pre-fill login email so user can log in
+      setEmail(emailTrim);
+      setLoginError(null);
+      setLoginInfo("User created, please login.");
+    } catch (err) {
+      console.error(err);
+      setSignupError("Could not reach server.");
+    } finally {
+      setSigningUp(false);
+    }
+  };
+
+  // ---------- LOGOUT ----------
+  const handleLogout = () => {
+    if (clientRef.current) {
+      try {
+        clientRef.current.deactivate();
+      } catch (e) {
+        console.error("Error during WebSocket disconnect", e);
+      } finally {
+        clientRef.current = null;
+      }
+    }
+
+    localStorage.removeItem("qt_username");
+
+    setConnected(false);
+    setMessages([]);
+    setChats([]);
+    setActiveChatUser(null);
+    setInput("");
+    setLastRead({});
+    setLoginError(null);
+
+    setLoggedInUser(null);
+    setLoginName("");
+    setEmail("");
+    setPassword("");
   };
 
   // ---------- SEND MESSAGE ----------
@@ -294,10 +471,43 @@ const App: React.FC = () => {
       body: JSON.stringify(msg),
     });
 
-    // you’re viewing this chat, so mark as read
     markChatRead(activeChatUser);
     setInput("");
   };
+    const handleSendLocation = () => {
+    if (!clientRef.current || !connected) return;
+    if (!loggedInUser || !activeChatUser) return;
+
+    if (!navigator.geolocation) {
+      alert("Location is not supported in this browser.");
+      return;
+    }
+
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        const { latitude, longitude } = pos.coords;
+        const content = `📍 Live location: https://www.google.com/maps?q=${latitude},${longitude}`;
+
+        const msg: ChatMessage = {
+          sender: loggedInUser,
+          recipient: activeChatUser,
+          content,
+        };
+
+        clientRef.current!.publish({
+          destination: "/app/chat.sendPrivate",
+          body: JSON.stringify(msg),
+        });
+
+        markChatRead(activeChatUser);
+      },
+      (err) => {
+        console.error(err);
+        alert("Could not get your location.");
+      }
+    );
+  };
+
 
   // current conversation messages
   const relevantMessages = messages.filter((m) => {
@@ -315,13 +525,10 @@ const App: React.FC = () => {
     if (!name) return;
     const trimmed = name.trim();
     if (!trimmed || trimmed === loggedInUser) return;
-
-    // We don’t artificially add it to chats here;
-    // as soon as you send the first message, it will appear via messages+WS.
     setActiveChatUser(trimmed);
   };
 
-  // ---------- UI: LOGIN SCREEN ----------
+  // ---------- UI: LOGIN / SIGNUP SCREEN ----------
   if (!loggedInUser) {
     return (
       <div
@@ -338,7 +545,7 @@ const App: React.FC = () => {
             backgroundColor: "#ffffff",
             borderRadius: 16,
             padding: "2rem 2.5rem",
-            width: 380,
+            width: 420,
             boxShadow: "0 10px 25px rgba(0,0,0,0.2)",
             fontFamily:
               "system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
@@ -354,96 +561,576 @@ const App: React.FC = () => {
             QuickTalk
           </h1>
           <p
-            style={{ marginTop: 0, marginBottom: "1.5rem", color: "#555" }}
+            style={{ marginTop: 0, marginBottom: "1.25rem", color: "#555" }}
           >
-            Sign in to start chatting with your contacts.
+            {authMode === "login"
+              ? "Sign in with your email and password."
+              : "Create your QuickTalk account and verify your email."}
           </p>
 
-          <form onSubmit={handleLogin}>
-            <div style={{ marginBottom: "1rem" }}>
-              <label
-                style={{
-                  display: "block",
-                  fontSize: 13,
-                  fontWeight: 600,
-                  marginBottom: 4,
-                  color: "#555",
-                }}
-              >
-                Email
-              </label>
-              <input
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                style={{
-                  width: "100%",
-                  padding: "8px 10px",
-                  borderRadius: 8,
-                  border: "1px solid #ccc",
-                  fontSize: 14,
-                }}
-                placeholder="you@example.com"
-              />
-            </div>
-
-            <div style={{ marginBottom: "1.2rem" }}>
-              <label
-                style={{
-                  display: "block",
-                  fontSize: 13,
-                  fontWeight: 600,
-                  marginBottom: 4,
-                  color: "#555",
-                }}
-              >
-                Username
-              </label>
-              <input
-                value={loginName}
-                onChange={(e) => setLoginName(e.target.value)}
-                style={{
-                  width: "100%",
-                  padding: "8px 10px",
-                  borderRadius: 8,
-                  border: "1px solid #ccc",
-                  fontSize: 14,
-                }}
-                placeholder="This will show in chats"
-              />
-            </div>
-
-            {loginError && (
-              <div
-                style={{
-                  marginBottom: "0.8rem",
-                  fontSize: 13,
-                  color: "#b00020",
-                }}
-              >
-                {loginError}
-              </div>
-            )}
-
+          {/* Tabs */}
+          <div
+            style={{
+              display: "flex",
+              marginBottom: "1rem",
+              borderBottom: "1px solid #eee",
+            }}
+          >
             <button
-              type="submit"
-              disabled={loggingIn}
+              type="button"
+              onClick={() => {
+                setAuthMode("login");
+                setLoginError(null);
+              }}
               style={{
-                width: "100%",
-                padding: "9px 0",
-                borderRadius: 999,
+                flex: 1,
+                padding: "8px 0",
                 border: "none",
-                backgroundColor: "#25D366",
-                color: "white",
-                fontWeight: 600,
-                fontSize: 15,
+                background: "none",
                 cursor: "pointer",
-                opacity: loggingIn ? 0.7 : 1,
+                fontWeight: authMode === "login" ? 700 : 500,
+                borderBottom:
+                  authMode === "login"
+                    ? "2px solid #25D366"
+                    : "2px solid transparent",
               }}
             >
-              {loggingIn ? "Signing in..." : "Sign in"}
+              Login
             </button>
-          </form>
+            <button
+              type="button"
+              onClick={() => {
+                setAuthMode("signup");
+                setSignupStep("FORM");
+                setSignupError(null);
+              }}
+              style={{
+                flex: 1,
+                padding: "8px 0",
+                border: "none",
+                background: "none",
+                cursor: "pointer",
+                fontWeight: authMode === "signup" ? 700 : 500,
+                borderBottom:
+                  authMode === "signup"
+                    ? "2px solid #25D366"
+                    : "2px solid transparent",
+              }}
+            >
+              Sign up
+            </button>
+          </div>
+
+          {authMode === "login" ? (
+            <form onSubmit={handleLogin}>
+              <div style={{ marginBottom: "1rem" }}>
+                <label
+                  style={{
+                    display: "block",
+                    fontSize: 13,
+                    fontWeight: 600,
+                    marginBottom: 4,
+                    color: "#555",
+                  }}
+                >
+                  Email
+                </label>
+                <input
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  style={{
+                    width: "100%",
+                    padding: "8px 10px",
+                    borderRadius: 8,
+                    border: "1px solid #ccc",
+                    fontSize: 14,
+                  }}
+                  placeholder="you@example.com"
+                />
+              </div>
+
+              <div style={{ marginBottom: "1.2rem" }}>
+                <label
+                  style={{
+                    display: "block",
+                    fontSize: 13,
+                    fontWeight: 600,
+                    marginBottom: 4,
+                    color: "#555",
+                  }}
+                >
+                  Password
+                </label>
+                <input
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  style={{
+                    width: "100%",
+                    padding: "8px 10px",
+                    borderRadius: 8,
+                    border: "1px solid #ccc",
+                    fontSize: 14,
+                  }}
+                  placeholder="Enter your password"
+                />
+              </div>
+
+              {loginError && (
+                <div
+                  style={{
+                    marginBottom: "0.8rem",
+                    fontSize: 13,
+                    color: "#b00020",
+                  }}
+                >
+                  {loginError}
+                </div>
+              )}
+              {loginInfo && (
+                <div
+                  style={{
+                    marginBottom: "0.8rem",
+                    fontSize: 13,
+                    color: "#0b8b3b", // nice green
+                  }}
+                >
+                {loginInfo}
+                </div>
+              )}
+
+              <button
+                type="submit"
+                disabled={loggingIn}
+                style={{
+                  width: "100%",
+                  padding: "9px 0",
+                  borderRadius: 999,
+                  border: "none",
+                  backgroundColor: "#25D366",
+                  color: "white",
+                  fontWeight: 600,
+                  fontSize: 15,
+                  cursor: "pointer",
+                  opacity: loggingIn ? 0.7 : 1,
+                }}
+              >
+                {loggingIn ? "Logging in..." : "Login"}
+              </button>
+
+              <div
+                style={{
+                  marginTop: "0.75rem",
+                  display: "flex",
+                  justifyContent: "space-between",
+                  fontSize: 12,
+                  color: "#555",
+                }}
+              >
+                <button
+                  type="button"
+                  style={{
+                    border: "none",
+                    background: "none",
+                    padding: 0,
+                    color: "#075E54",
+                    cursor: "pointer",
+                  }}
+                  onClick={() => {
+                    setAuthMode("signup");
+                    setSignupStep("FORM");
+                    setSignupError(null);
+                  }}
+                >
+                  Create an account
+                </button>
+                <button
+                  type="button"
+                  style={{
+                    border: "none",
+                    background: "none",
+                    padding: 0,
+                    color: "#075E54",
+                    cursor: "pointer",
+                  }}
+                  onClick={() =>
+                    alert("Forgot password flow will be wired later 🙂")
+                  }
+                >
+                  Forgot password?
+                </button>
+              </div>
+            </form>
+          ) : (
+            <form
+              onSubmit={
+                signupStep === "FORM" ? handleSignupSubmit : handleSignupVerify
+              }
+            >
+              {signupStep === "FORM" ? (
+                <>
+                  <div
+                    style={{
+                      display: "flex",
+                      gap: "0.5rem",
+                      marginBottom: "1rem",
+                    }}
+                  >
+                    <div style={{ flex: 1 }}>
+                      <label
+                        style={{
+                          display: "block",
+                          fontSize: 13,
+                          fontWeight: 600,
+                          marginBottom: 4,
+                          color: "#555",
+                        }}
+                      >
+                        First name
+                      </label>
+                      <input
+                        value={signupFirstName}
+                        onChange={(e) => setSignupFirstName(e.target.value)}
+                        style={{
+                          width: "100%",
+                          padding: "8px 10px",
+                          borderRadius: 8,
+                          border: "1px solid #ccc",
+                          fontSize: 14,
+                        }}
+                      />
+                    </div>
+                    <div style={{ flex: 1 }}>
+                      <label
+                        style={{
+                          display: "block",
+                          fontSize: 13,
+                          fontWeight: 600,
+                          marginBottom: 4,
+                          color: "#555",
+                        }}
+                      >
+                        Last name
+                      </label>
+                      <input
+                        value={signupLastName}
+                        onChange={(e) => setSignupLastName(e.target.value)}
+                        style={{
+                          width: "100%",
+                          padding: "8px 10px",
+                          borderRadius: 8,
+                          border: "1px solid #ccc",
+                          fontSize: 14,
+                        }}
+                      />
+                    </div>
+                  </div>
+
+                  <div style={{ marginBottom: "1rem" }}>
+                    <label
+                      style={{
+                        display: "block",
+                        fontSize: 13,
+                        fontWeight: 600,
+                        marginBottom: 4,
+                        color: "#555",
+                      }}
+                    >
+                      Email
+                    </label>
+                    <input
+                      type="email"
+                      value={signupEmail}
+                      onChange={(e) => setSignupEmail(e.target.value)}
+                      style={{
+                        width: "100%",
+                        padding: "8px 10px",
+                        borderRadius: 8,
+                        border: "1px solid #ccc",
+                        fontSize: 14,
+                      }}
+                      placeholder="you@example.com"
+                    />
+                  </div>
+
+                  <div style={{ marginBottom: "1rem" }}>
+                    <label
+                      style={{
+                        display: "block",
+                        fontSize: 13,
+                        fontWeight: 600,
+                        marginBottom: 4,
+                        color: "#555",
+                      }}
+                    >
+                      Name to show in chats
+                    </label>
+                    <input
+                      value={signupUsername}
+                      onChange={(e) => setSignupUsername(e.target.value)}
+                      style={{
+                        width: "100%",
+                        padding: "8px 10px",
+                        borderRadius: 8,
+                        border: "1px solid #ccc",
+                        fontSize: 14,
+                      }}
+                      placeholder="e.g. Siri"
+                    />
+                  </div>
+
+                  <div
+                    style={{
+                      display: "flex",
+                      gap: "0.5rem",
+                      marginBottom: "1rem",
+                    }}
+                  >
+                    <div style={{ flex: 1 }}>
+                      <label
+                        style={{
+                          display: "block",
+                          fontSize: 13,
+                          fontWeight: 600,
+                          marginBottom: 4,
+                          color: "#555",
+                        }}
+                      >
+                        New password
+                      </label>
+                      <input
+                        type="password"
+                        value={signupPassword}
+                        onChange={(e) => setSignupPassword(e.target.value)}
+                        style={{
+                          width: "100%",
+                          padding: "8px 10px",
+                          borderRadius: 8,
+                          border: "1px solid #ccc",
+                          fontSize: 14,
+                        }}
+                      />
+                    </div>
+                    <div style={{ flex: 1 }}>
+                      <label
+                        style={{
+                          display: "block",
+                          fontSize: 13,
+                          fontWeight: 600,
+                          marginBottom: 4,
+                          color: "#555",
+                        }}
+                      >
+                        Confirm password
+                      </label>
+                      <input
+                        type="password"
+                        value={signupConfirmPassword}
+                        onChange={(e) =>
+                          setSignupConfirmPassword(e.target.value)
+                        }
+                        style={{
+                          width: "100%",
+                          padding: "8px 10px",
+                          borderRadius: 8,
+                          border: "1px solid #ccc",
+                          fontSize: 14,
+                        }}
+                      />
+                    </div>
+                  </div>
+
+                  <div
+                    style={{
+                      display: "flex",
+                      gap: "0.5rem",
+                      marginBottom: "1rem",
+                    }}
+                  >
+                    <div style={{ flex: 1 }}>
+                      <label
+                        style={{
+                          display: "block",
+                          fontSize: 13,
+                          fontWeight: 600,
+                          marginBottom: 4,
+                          color: "#555",
+                        }}
+                      >
+                        Gender
+                      </label>
+                      <input
+                        value={signupGender}
+                        onChange={(e) => setSignupGender(e.target.value)}
+                        style={{
+                          width: "100%",
+                          padding: "8px 10px",
+                          borderRadius: 8,
+                          border: "1px solid #ccc",
+                          fontSize: 14,
+                        }}
+                        placeholder="Optional"
+                      />
+                    </div>
+                    <div style={{ flex: 1 }}>
+                      <label
+                        style={{
+                          display: "block",
+                          fontSize: 13,
+                          fontWeight: 600,
+                          marginBottom: 4,
+                          color: "#555",
+                        }}
+                      >
+                        Date of birth
+                      </label>
+                      <input
+                        type="date"
+                        value={signupDob}
+                        onChange={(e) => setSignupDob(e.target.value)}
+                        style={{
+                          width: "100%",
+                          padding: "8px 10px",
+                          borderRadius: 8,
+                          border: "1px solid #ccc",
+                          fontSize: 14,
+                        }}
+                      />
+                    </div>
+                  </div>
+
+                  <div style={{ marginBottom: "1rem" }}>
+                    <label
+                      style={{
+                        display: "block",
+                        fontSize: 13,
+                        fontWeight: 600,
+                        marginBottom: 4,
+                        color: "#555",
+                      }}
+                    >
+                      Country of origin
+                    </label>
+                    <input
+                      value={signupCountry}
+                      onChange={(e) => setSignupCountry(e.target.value)}
+                      style={{
+                        width: "100%",
+                        padding: "8px 10px",
+                        borderRadius: 8,
+                        border: "1px solid #ccc",
+                        fontSize: 14,
+                      }}
+                      placeholder="e.g. India"
+                    />
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div style={{ marginBottom: "1rem" }}>
+                    <label
+                      style={{
+                        display: "block",
+                        fontSize: 13,
+                        fontWeight: 600,
+                        marginBottom: 4,
+                        color: "#555",
+                      }}
+                    >
+                      Email
+                    </label>
+                    <input
+                      type="email"
+                      value={signupEmail}
+                      disabled
+                      style={{
+                        width: "100%",
+                        padding: "8px 10px",
+                        borderRadius: 8,
+                        border: "1px solid #ccc",
+                        fontSize: 14,
+                        backgroundColor: "#f3f4f6",
+                      }}
+                    />
+                  </div>
+
+                  <div style={{ marginBottom: "1.2rem" }}>
+                    <label
+                      style={{
+                        display: "block",
+                        fontSize: 13,
+                        fontWeight: 600,
+                        marginBottom: 4,
+                        color: "#555",
+                      }}
+                    >
+                      Enter OTP
+                    </label>
+                    <input
+                      value={signupOtp}
+                      onChange={(e) => setSignupOtp(e.target.value)}
+                      style={{
+                        width: "100%",
+                        padding: "8px 10px",
+                        borderRadius: 8,
+                        border: "1px solid #ccc",
+                        fontSize: 14,
+                        letterSpacing: 4,
+                      }}
+                      placeholder="6-digit code"
+                    />
+                    <p
+                      style={{
+                        marginTop: 4,
+                        fontSize: 12,
+                        color: "#777",
+                      }}
+                    >
+                      For dev, check backend logs for the OTP.
+                    </p>
+                  </div>
+                </>
+              )}
+
+              {signupError && (
+                <div
+                  style={{
+                    marginBottom: "0.8rem",
+                    fontSize: 13,
+                    color: "#b00020",
+                  }}
+                >
+                  {signupError}
+                </div>
+              )}
+
+              <button
+                type="submit"
+                disabled={signingUp}
+                style={{
+                  width: "100%",
+                  padding: "9px 0",
+                  borderRadius: 999,
+                  border: "none",
+                  backgroundColor: "#25D366",
+                  color: "white",
+                  fontWeight: 600,
+                  fontSize: 15,
+                  cursor: "pointer",
+                  opacity: signingUp ? 0.7 : 1,
+                }}
+              >
+                {signupStep === "FORM"
+                  ? signingUp
+                    ? "Creating account..."
+                    : "Create account"
+                  : signingUp
+                  ? "Verifying..."
+                  : "Verify email"}
+              </button>
+            </form>
+          )}
         </div>
       </div>
     );
@@ -452,7 +1139,6 @@ const App: React.FC = () => {
   // ---------- UI: CHAT SCREEN ----------
   return (
     <div className="app-root">
-      {/* TOP BAR */}
       <header className="app-header">
         <div className="app-header-left">
           <span className="app-title">QuickTalk</span>
@@ -466,15 +1152,29 @@ const App: React.FC = () => {
           <span className="app-user-label">
             Logged in as {loggedInUser ?? "Unknown"}
           </span>
+          <button
+            className="logout-button"
+            onClick={handleLogout}
+            style={{
+              marginLeft: "0.75rem",
+              padding: "6px 10px",
+              borderRadius: 999,
+              border: "1px solid rgba(255,255,255,0.3)",
+              background: "transparent",
+              color: "inherit",
+              cursor: "pointer",
+              fontSize: 13,
+            }}
+          >
+            Logout
+          </button>
           <button className="theme-toggle" onClick={toggleTheme}>
             {theme === "light" ? "🌙 Dark" : "☀️ Light"}
           </button>
         </div>
       </header>
 
-      {/* MAIN LAYOUT */}
       <div className="app-layout">
-        {/* LEFT: CHATS LIST */}
         <aside className="sidebar">
           <div className="sidebar-header">
             <div className="sidebar-title">Chats</div>
@@ -524,7 +1224,6 @@ const App: React.FC = () => {
           </button>
         </aside>
 
-        {/* RIGHT: CONVERSATION AREA */}
         <main className="chat-panel">
           <div className="chat-header">
             {activeChatUser ? (
@@ -564,62 +1263,113 @@ const App: React.FC = () => {
               </div>
             )}
 
-            {activeChatUser &&
-              relevantMessages.map((m, i) => {
-                const isMine = m.sender === loggedInUser;
-                return (
-                  <div
-                    key={m.id ?? i}
-                    className={
-                      "chat-bubble-row " +
-                      (isMine
-                        ? "chat-bubble-row--me"
-                        : "chat-bubble-row--them")
-                    }
-                  >
-                    <div
-                      className={
-                        "chat-bubble " +
-                        (isMine
-                          ? "chat-bubble--me"
-                          : "chat-bubble--them")
-                      }
-                    >
-                      <div className="chat-bubble-sender">
-                        {isMine ? "You" : m.sender}
-                      </div>
-                      <div className="chat-bubble-text">
-                        {m.content}
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
+{activeChatUser &&
+  relevantMessages.map((m, i) => {
+    const isMine = m.sender === loggedInUser;
+    const currentDateKey = dateKey(m.sentAt);
+    const prev = i > 0 ? relevantMessages[i - 1] : null;
+    const prevDateKey = prev ? dateKey(prev.sentAt) : null;
+    const showDateHeader = i === 0 || currentDateKey !== prevDateKey;
+
+    return (
+      <React.Fragment key={m.id ?? i}>
+        {showDateHeader && (
+          <div className="chat-date-divider">
+            <span>{formatDate(m.sentAt)}</span>
+          </div>
+        )}
+
+        <div
+          className={
+            "chat-bubble-row " +
+            (isMine
+              ? "chat-bubble-row--me"
+              : "chat-bubble-row--them")
+          }
+        >
+          <div
+            className={
+              "chat-bubble " +
+              (isMine
+                ? "chat-bubble--me"
+                : "chat-bubble--them")
+            }
+          >
+            <div className="chat-bubble-sender">
+              {isMine ? "You" : m.sender}
+            </div>
+            <div className="chat-bubble-text">{m.content}</div>
+            <div className="chat-bubble-meta">
+              {formatTime(m.sentAt)}
+            </div>
+          </div>
+        </div>
+      </React.Fragment>
+    );
+  })}
+
           </div>
 
-          <div className="chat-input-row">
-            <input
-              className="chat-input"
-              placeholder={
-                activeChatUser
-                  ? `Message ${activeChatUser}...`
-                  : "Select a chat or start a new one"
-              }
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") sendMessage();
-              }}
-              disabled={!connected || !activeChatUser}
-            />
-            <button
-              className="chat-send-button"
-              onClick={sendMessage}
-              disabled={!connected || !activeChatUser}
-            >
-              Send
-            </button>
-          </div>
+<div className="chat-input-row">
+  {/* Emoji button */}
+  <button
+    type="button"
+    className="chat-icon-button"
+    onClick={() => setShowEmojiPicker((prev) => !prev)}
+    disabled={!connected || !activeChatUser}
+  >
+    😊
+  </button>
+
+  {/* Location button */}
+  <button
+    type="button"
+    className="chat-icon-button"
+    onClick={handleSendLocation}
+    disabled={!connected || !activeChatUser}
+  >
+    📍
+  </button>
+
+  <input
+    className="chat-input"
+    placeholder={
+      activeChatUser
+        ? `Message ${activeChatUser}...`
+        : "Select a chat or start a new one"
+    }
+    value={input}
+    onChange={(e) => setInput(e.target.value)}
+    onKeyDown={(e) => {
+      if (e.key === "Enter") sendMessage();
+    }}
+    disabled={!connected || !activeChatUser}
+  />
+  <button
+    className="chat-send-button"
+    onClick={sendMessage}
+    disabled={!connected || !activeChatUser}
+  >
+    Send
+  </button>
+</div>
+
+{/* Simple emoji picker */}
+{showEmojiPicker && (
+  <div className="emoji-picker">
+    {commonEmojis.map((emoji) => (
+      <button
+        key={emoji}
+        type="button"
+        className="emoji-button"
+        onClick={() => addEmoji(emoji)}
+      >
+        {emoji}
+      </button>
+    ))}
+  </div>
+)}
+
         </main>
       </div>
     </div>
