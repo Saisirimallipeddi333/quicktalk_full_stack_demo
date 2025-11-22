@@ -1,0 +1,58 @@
+version: '3.9'
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: quicktalk-mysql
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: Jaishreeram@1176
+      MYSQL_DATABASE: quicktalk
+    ports:
+      - "3306:3306"
+
+  redis:
+    image: redis:7
+    container_name: quicktalk-redis
+    restart: always
+    ports:
+      - "6379:6379"
+
+  minio:
+    image: minio/minio
+    container_name: quicktalk-minio
+    restart: always
+    environment:
+      MINIO_ROOT_USER: siri
+      MINIO_ROOT_PASSWORD: Jaishreeram@1176
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+
+  backend:
+    build: ./backend
+    container_name: quicktalk-backend
+    depends_on:
+      - mysql
+      - redis
+      - minio
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/quicktalk?useSSL=false&allowPublicKeyRetrieval=true
+      SPRING_DATASOURCE_USERNAME: root
+      SPRING_DATASOURCE_PASSWORD: Jaishreeram@1176
+      SPRING_DATA_REDIS_HOST: redis
+      MINIO_URL: http://minio:9000
+      MINIO_ACCESS_KEY: siri
+      MINIO_SECRET_KEY: Jaishreeram@1176
+      MINIO_BUCKET: quicktalk-media
+    ports:
+      - "8080:8080"
+
+  frontend:
+    build: ./frontend
+    container_name: quicktalk-frontend
+    depends_on:
+      - backend
+    ports:
+      - "5173:5173"
