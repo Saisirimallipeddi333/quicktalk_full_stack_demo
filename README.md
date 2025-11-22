@@ -1,31 +1,31 @@
 # QuickTalk – Real Time Chat Demo
-QuickTalk is a small full stack chat application that I built to practice working with a modern stack and real time messaging.
-It has a simple WhatsApp style interface, supports private one to one chats between users, and uses WebSockets so messages appear instantly without refreshing the page.
-The whole app runs with Docker, so you can bring up the backend, frontend, and database with a single command.
+QuickTalk is a small full stack chat app I’m building to practice modern web development and real-time messaging.  
+It has a WhatsApp-style layout, supports private one-to-one chats, and uses WebSockets so messages show up instantly.
 
-# Features
-- Login with email and username (no password, demo only)
-- WebSocket based real time messaging using STOMP
-- One to one private chats between users
-- Sidebar with recent conversations and last message preview
-- Clean chat UI with message bubbles and sender labels
-- Light and dark theme toggle
-- Docker Compose setup for backend, frontend, and database
-  
-# Tech Stack
+## Features
+- Sign up with email, chat name, password
+- Email OTP verification on first signup (OTP logged in backend for now)
+- Login with email + password
+- One-to-one private chats
+- WebSocket-based real-time messaging (STOMP)
+- Sidebar with recent chats and last message preview
+- Message bubbles with date/time separators
+- Light / dark theme toggle
+- Docker Compose for backend, frontend, and DB
+
+## Tech Stack
 **Frontend**
-- React with TypeScript
-- Vite dev server
-- STOMP client for WebSockets
+- React, TypeScript, Vite  
+- STOMP client over WebSocket
 
 **Backend**
-- Java Spring Boot
-- STOMP over WebSocket
-- REST endpoints for login and messaging
-- MySQL (or compatible relational database)
+- Java, Spring Boot  
+- STOMP over WebSocket  
+- REST APIs for auth and message history  
+- MySQL (or compatible relational DB) via JPA
 
-**Infrastructure**
-- Docker
+**Infra**
+- Docker  
 - Docker Compose
   
 # How to Run (with Docker)
