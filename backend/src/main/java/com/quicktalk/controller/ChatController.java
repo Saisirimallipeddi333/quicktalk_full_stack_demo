@@ -5,48 +5,74 @@ import com.quicktalk.repo.ChatMessageRepository;
 import org.springframework.messaging.handler.annotation.MessageMapping;
 import org.springframework.messaging.handler.annotation.Payload;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
-import org.springframework.stereotype.Controller;
+import org.springframework.web.bind.annotation.*;
 
 import java.time.Instant;
+import java.util.List;
 
-@Controller
+@RestController
+@RequestMapping("/api/messages")
+@CrossOrigin(origins = "*")
 public class ChatController {
 
-    private final SimpMessagingTemplate messagingTemplate;
     private final ChatMessageRepository chatMessageRepository;
+    private final SimpMessagingTemplate messagingTemplate;
 
-    public ChatController(SimpMessagingTemplate messagingTemplate,
-                          ChatMessageRepository chatMessageRepository) {
-        this.messagingTemplate = messagingTemplate;
+    public ChatController(ChatMessageRepository chatMessageRepository,
+                          SimpMessagingTemplate messagingTemplate) {
         this.chatMessageRepository = chatMessageRepository;
+        this.messagingTemplate = messagingTemplate;
     }
 
-    // Create a stable room id for a pair of users: siri|usha, same for both sides
-    private String buildRoom(String user1, String user2) {
-        if (user1 == null || user2 == null) {
-            return "global";
-        }
-        String a = user1.trim().toLowerCase();
-        String b = user2.trim().toLowerCase();
-        return (a.compareTo(b) < 0) ? a + "|" + b : b + "|" + a;
-    }
-
-    // Called from frontend: destination '/app/chat.sendPrivate'
+    // -------- WEBSOCKET: SEND + SAVE --------
+    // Frontend publishes to /app/chat.sendPrivate
     @MessageMapping("/chat.sendPrivate")
     public void sendPrivate(@Payload ChatMessage message) {
-        if (message.getSender() == null || message.getRecipient() == null) {
-            return; // ignore bad messages
+
+        if (message.getSender() == null ||
+            message.getRecipient() == null ||
+            message.getContent() == null ||
+            message.getContent().trim().isEmpty()) {
+            return;
         }
 
-        message.setSentAt(Instant.now());
-        message.setRoom(buildRoom(message.getSender(), message.getRecipient()));
+        // set timestamp if missing
+        if (message.getSentAt() == null) {
+            message.setSentAt(Instant.now());
+        }
 
+        // save to MySQL
         ChatMessage saved = chatMessageRepository.save(message);
 
-        // Push to sender's personal topic
-        messagingTemplate.convertAndSend("/topic/user." + message.getSender(), saved);
+        // send to sender
+        messagingTemplate.convertAndSend(
+                "/topic/user." + saved.getSender(),
+                saved
+        );
 
-        // Push to recipient's personal topic
-        messagingTemplate.convertAndSend("/topic/user." + message.getRecipient(), saved);
+        // send to recipient (if not self-chat)
+        if (!saved.getSender().equals(saved.getRecipient())) {
+            messagingTemplate.convertAndSend(
+                    "/topic/user." + saved.getRecipient(),
+                    saved
+            );
+        }
+    }
+
+    // -------- REST: HISTORY FOR ONE USER --------
+    // GET /api/messages/history?user=Siri
+    @GetMapping("/history")
+    public List<ChatMessage> historyForUser(@RequestParam("user") String user) {
+        return chatMessageRepository.findAllForUser(user);
+    }
+
+    // -------- REST: CONVERSATION BETWEEN TWO USERS --------
+    // GET /api/messages/conversation?user1=Siri&user2=Usha
+    @GetMapping("/conversation")
+    public List<ChatMessage> conversation(
+            @RequestParam("user1") String user1,
+            @RequestParam("user2") String user2
+    ) {
+        return chatMessageRepository.findConversation(user1, user2);
     }
 }

@@ -16,6 +16,62 @@ type ChatSummary = {
   otherUser: string;
   lastMessage: string;
   lastTime?: string;
+  unreadCount: number;
+};
+
+// Build sidebar chat list from full message history + lastRead map
+const buildChatSummaries = (
+  me: string,
+  msgs: ChatMessage[],
+  lastRead: Record<string, string>
+): ChatSummary[] => {
+  // group messages by "other user"
+  const grouped: Record<string, ChatMessage[]> = {};
+
+  msgs.forEach((m) => {
+    const other = m.sender === me ? m.recipient : m.sender;
+    if (!other) return;
+
+    if (!grouped[other]) grouped[other] = [];
+    grouped[other].push(m);
+  });
+
+  const summaries: ChatSummary[] = Object.entries(grouped).map(
+    ([other, list]) => {
+      // sort list by time/id just in case
+      list.sort((a, b) => {
+        const t1 = new Date(a.sentAt ?? 0).getTime();
+        const t2 = new Date(b.sentAt ?? 0).getTime();
+        if (t1 !== t2) return t1 - t2;
+        return (a.id ?? 0) - (b.id ?? 0);
+      });
+
+      const last = list[list.length - 1];
+      const lastTime = last.sentAt ?? new Date().toISOString();
+
+      const lrStr = lastRead[other];
+      const lr = lrStr ? new Date(lrStr).getTime() : 0;
+
+      // unread = messages to me after lastRead
+      const unreadCount = list.filter((m) => {
+        if (m.recipient !== me) return false;
+        const t = new Date(m.sentAt ?? 0).getTime();
+        return t > lr;
+      }).length;
+
+      return {
+        otherUser: other,
+        lastMessage: last.content,
+        lastTime,
+        unreadCount,
+      };
+    }
+  );
+
+  // most recent chat on top
+  return summaries.sort(
+    (a, b) => (b.lastTime ?? "").localeCompare(a.lastTime ?? "")
+  );
 };
 
 const App: React.FC = () => {
@@ -52,8 +108,15 @@ const App: React.FC = () => {
   const [chats, setChats] = useState<ChatSummary[]>([]);
   const [activeChatUser, setActiveChatUser] = useState<string | null>(null);
   const [input, setInput] = useState("");
+  const [lastRead, setLastRead] = useState<Record<string, string>>({});
 
   const clientRef = useRef<Client | null>(null);
+  const activeChatUserRef = useRef<string | null>(null);
+
+  // keep ref in sync
+  useEffect(() => {
+    activeChatUserRef.current = activeChatUser;
+  }, [activeChatUser]);
 
   // Load stored username (auto-login)
   useEffect(() => {
@@ -63,6 +126,76 @@ const App: React.FC = () => {
       setLoginName(stored);
     }
   }, []);
+
+  // Load last-read timestamps from localStorage for this user
+  useEffect(() => {
+    if (!loggedInUser) return;
+    const prefix = `qt_lastRead_${loggedInUser}_`;
+    const map: Record<string, string> = {};
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key && key.startsWith(prefix)) {
+        const other = key.substring(prefix.length);
+        const value = localStorage.getItem(key);
+        if (value) map[other] = value;
+      }
+    }
+    setLastRead(map);
+  }, [loggedInUser]);
+
+  const markChatRead = (other: string) => {
+    if (!loggedInUser) return;
+    const now = new Date().toISOString();
+    const key = `qt_lastRead_${loggedInUser}_${other}`;
+    localStorage.setItem(key, now);
+    setLastRead((prev) => ({ ...prev, [other]: now }));
+  };
+
+  // Load message history from backend when we know who is logged in
+  useEffect(() => {
+    if (!loggedInUser) return;
+
+    const controller = new AbortController();
+
+    const loadHistory = async () => {
+      try {
+        const res = await fetch(
+          `http://localhost:8080/api/messages/history?user=${encodeURIComponent(
+            loggedInUser
+          )}`,
+          { signal: controller.signal }
+        );
+
+        if (!res.ok) {
+          console.error("Failed to load history", res.status);
+          return;
+        }
+
+        const data: ChatMessage[] = await res.json();
+        // sort by time then id, just in case
+        data.sort((a, b) => {
+          const t1 = new Date(a.sentAt ?? 0).getTime();
+          const t2 = new Date(b.sentAt ?? 0).getTime();
+          if (t1 !== t2) return t1 - t2;
+          return (a.id ?? 0) - (b.id ?? 0);
+        });
+
+        setMessages(data);
+      } catch (e) {
+        if (e instanceof DOMException && e.name === "AbortError") return;
+        console.error("Error loading history", e);
+      }
+    };
+
+    loadHistory();
+    return () => controller.abort();
+  }, [loggedInUser]);
+
+  // Whenever messages / lastRead / loggedInUser change, rebuild chat list
+  useEffect(() => {
+    if (!loggedInUser) return;
+    setChats(buildChatSummaries(loggedInUser, messages, lastRead));
+  }, [loggedInUser, messages, lastRead]);
 
   // Connect WebSocket AFTER login
   useEffect(() => {
@@ -82,33 +215,14 @@ const App: React.FC = () => {
 
           setMessages((prev) => [...prev, body]);
 
-          // figure out the "other person" in this DM
+          // If no chat selected yet, open the DM we just got
           const other =
             body.sender === loggedInUser ? body.recipient : body.sender;
-
-          if (!other) return;
-
-          setChats((prev) => {
-            const idx = prev.findIndex((c) => c.otherUser === other);
-            const updated: ChatSummary = {
-              otherUser: other,
-              lastMessage: body.content,
-              lastTime: body.sentAt ?? new Date().toISOString(),
-            };
-
-            if (idx === -1) {
-              // new chat – add to top
-              return [updated, ...prev];
-            } else {
-              // update existing, move to top
-              const copy = [...prev];
-              copy.splice(idx, 1);
-              return [updated, ...copy];
-            }
-          });
-
-          // if no active chat selected yet, open this one
-          setActiveChatUser((current) => current ?? other);
+          if (!activeChatUserRef.current && other) {
+            setActiveChatUser(other);
+            // user is looking at it now, mark read
+            markChatRead(other);
+          }
         });
       },
       onDisconnect: () => {
@@ -175,12 +289,13 @@ const App: React.FC = () => {
       content: input.trim(),
     };
 
-    // NO optimistic add here – server will send back to both users
     clientRef.current.publish({
       destination: "/app/chat.sendPrivate",
       body: JSON.stringify(msg),
     });
 
+    // you’re viewing this chat, so mark as read
+    markChatRead(activeChatUser);
     setInput("");
   };
 
@@ -201,17 +316,8 @@ const App: React.FC = () => {
     const trimmed = name.trim();
     if (!trimmed || trimmed === loggedInUser) return;
 
-    setChats((prev) => {
-      if (prev.some((c) => c.otherUser === trimmed)) return prev;
-      return [
-        {
-          otherUser: trimmed,
-          lastMessage: "",
-          lastTime: new Date().toISOString(),
-        },
-        ...prev,
-      ];
-    });
+    // We don’t artificially add it to chats here;
+    // as soon as you send the first message, it will appear via messages+WS.
     setActiveChatUser(trimmed);
   };
 
@@ -387,7 +493,10 @@ const App: React.FC = () => {
             {chats.map((chat) => (
               <button
                 key={chat.otherUser}
-                onClick={() => setActiveChatUser(chat.otherUser)}
+                onClick={() => {
+                  setActiveChatUser(chat.otherUser);
+                  markChatRead(chat.otherUser);
+                }}
                 className={
                   "chat-list-item" +
                   (activeChatUser === chat.otherUser
@@ -395,10 +504,17 @@ const App: React.FC = () => {
                     : "")
                 }
               >
-                <div className="chat-list-item-name">{chat.otherUser}</div>
+                <div className="chat-list-item-name">
+                  {chat.otherUser}
+                </div>
                 <div className="chat-list-item-last">
                   {chat.lastMessage || "No messages yet"}
                 </div>
+                {chat.unreadCount > 0 && (
+                  <div className="chat-unread-badge">
+                    {chat.unreadCount}
+                  </div>
+                )}
               </button>
             ))}
           </div>
@@ -472,7 +588,9 @@ const App: React.FC = () => {
                       <div className="chat-bubble-sender">
                         {isMine ? "You" : m.sender}
                       </div>
-                      <div className="chat-bubble-text">{m.content}</div>
+                      <div className="chat-bubble-text">
+                        {m.content}
+                      </div>
                     </div>
                   </div>
                 );

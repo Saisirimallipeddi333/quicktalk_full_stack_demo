@@ -1,39 +1,15 @@
-package com.quicktalk.model;
+package com.quicktalk.dto;
 
-import com.fasterxml.jackson.annotation.JsonFormat;
-import jakarta.persistence.*;
 import java.time.Instant;
 
-@Entity
-@Table(name = "chat_messages")
-public class ChatMessage {
-
-    @Id
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
+public class ChatMessageDto {
     private Long id;
-
-    @Column(nullable = false)
     private String sender;
-
-    @Column(nullable = false)
     private String recipient;
-
-    @Column(nullable = false, columnDefinition = "TEXT")
     private String content;
-
-    @JsonFormat(shape = JsonFormat.Shape.STRING)
-    @Column(nullable = false)
     private Instant sentAt;
 
-    public ChatMessage() {
-    }
-
-    public ChatMessage(String sender, String recipient, String content, Instant sentAt) {
-        this.sender = sender;
-        this.recipient = recipient;
-        this.content = content;
-        this.sentAt = sentAt;
-    }
+    public ChatMessageDto() {}
 
     public Long getId() {
         return id;
