@@ -45,3 +45,10 @@ It has a WhatsApp-style layout, supports private one-to-one chats, and uses WebS
 
 4. **Open the app in your browser:**
    http://localhost:5173   (or whatever port your frontend uses)
+
+   ## Screenshots
+
+![Login Page](screenshots/Login_Page.png)
+![Sign Up Page](screenshots/SignUp_Page.png)
+![Main Chat Page](screenshots/Main_Page.png)
+
